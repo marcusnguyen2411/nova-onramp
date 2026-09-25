@@ -22,6 +22,6 @@ services:
     command: follow.sh
     network_mode: host
     ipc: host
-    depends_on:
-      - control
+    # No depends_on: `docker compose run follow` would start a second control
+    # container (and a second turtlesim window). follow.py waits for turtlesim itself.
     tty: true
