@@ -1,0 +1,27 @@
+# One per terminal:
+#   docker compose run --rm control
+#   docker compose run --rm follow
+
+services:
+  control:
+    build: .
+    image: nova_ros
+    command: control.sh
+    # Host network + IPC so the two containers can talk.
+    network_mode: host
+    ipc: host
+    # Let turtlesim open its window on your screen.
+    environment:
+      - DISPLAY
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix
+    tty: true
+
+  follow:
+    image: nova_ros
+    command: follow.sh
+    network_mode: host
+    ipc: host
+    depends_on:
+      - control
+    tty: true
