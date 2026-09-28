@@ -10,9 +10,23 @@ from rclpy.node import Node
 from geometry_msgs.msg import Twist  # ROS2 message type: forward speed + turn speed
 from turtlesim.msg import Pose       # ROS2 message type: turtle position (x, y) and heading (theta)
 from turtlesim.srv import Spawn      # ROS2 service type: ask turtlesim to add a new turtle
+from std_msgs.msg import Bool
 
 FOLLOW_DIST = 1.0  # stay about this far behind turtle1 (turtle-world units)
+RUN_DIST = 7.0     # in run-away mode, keep at least this far from turtle1
 
+
+class Run_Away(Node):
+    def __init__(self):
+        super().__init__('run_away')
+
+        self.publisher_ = self.create_publisher(Bool, 'run_away', 10)
+        self.timer_ = self.create_timer(10, self.toggle_run_away)
+        self.run_away = Bool(data=False) # False means turtle2 is not running away
+
+    def toggle_run_away(self):
+        self.run_away.data = not self.run_away.data
+        self.publisher_.publish(self.run_away)
 
 class Turtle_Follower(Node):
     def __init__(self):
@@ -28,11 +42,13 @@ class Turtle_Follower(Node):
         # Track both turtles: the leader (turtle1) and ourselves (turtle2).
         self.create_subscription(Pose, 'turtle1/pose', self.on_leader_pose, 10)
         self.create_subscription(Pose, 'turtle2/pose', self.on_pose, 10)
+        self.create_subscription(Bool, 'run_away', self.on_run_away, 10)
         # Recompute drive command 20 times a second (20 Hz)
         self.timer_ = self.create_timer(0.05, self.timer_callback)
 
         self.leader = None  # latest turtle1 position
         self.pose = None    # latest turtle2 position
+        self.run_away = Bool(data=False)
 
         self.get_logger().info('turtle2 spawned and following turtle1. Ctrl+C quit.')
 
@@ -42,6 +58,9 @@ class Turtle_Follower(Node):
     def on_pose(self, msg):
         self.pose = msg
 
+    def on_run_away(self, msg):
+        self.run_away = msg
+
     def timer_callback(self):
         twist = Twist()  # all zeros = stand still (no movement)
 
@@ -49,7 +68,15 @@ class Turtle_Follower(Node):
             dx = self.leader.x - self.pose.x
             dy = self.leader.y - self.pose.y
             dist = math.hypot(dx, dy)
-            if dist > FOLLOW_DIST:
+            if self.run_away.data:
+                if dist < RUN_DIST:
+                    # Aim directly away from turtle1; slow down as it reaches RUN_DIST.
+                    err = math.atan2(-dy, -dx) - self.pose.theta
+                    err = math.atan2(math.sin(err), math.cos(err))
+                    twist.angular.z = 4.0 * err
+                    gap = RUN_DIST - dist
+                    twist.linear.x = min(2.0, 1.5 * gap) * max(0.0, math.cos(err))
+            elif dist > FOLLOW_DIST:
                 # Same steering as control.py, but the target is turtle1.
                 err = math.atan2(dy, dx) - self.pose.theta
                 err = math.atan2(math.sin(err), math.cos(err))
@@ -63,12 +90,17 @@ class Turtle_Follower(Node):
 
 if __name__ == '__main__':
     rclpy.init()
-    node = Turtle_Follower()
+    follower = Turtle_Follower()
+    run_away = Run_Away()
+    executor = rclpy.executors.SingleThreadedExecutor()
+    executor.add_node(follower)
+    executor.add_node(run_away)
     try:
-        rclpy.spin(node)  # keep running the timer and listeners until Ctrl+C
+        executor.spin()  # keep both timers and listeners running until Ctrl+C
     except KeyboardInterrupt:
         pass
     finally:
-        node.destroy_node()
+        follower.destroy_node()
+        run_away.destroy_node()
         if rclpy.ok():  # Ctrl+C may have already shut ROS down
             rclpy.shutdown()
